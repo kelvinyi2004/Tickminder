@@ -129,6 +129,16 @@ export async function POST(request: Request) {
   // If independent AI Job Service is configured, forward authorized request server-to-server
   const serviceUrl = typeof env !== "undefined" ? env.AI_JOB_SERVICE_URL : undefined;
   const clientSecret = typeof env !== "undefined" ? env.AI_JOB_SERVICE_SECRET : undefined;
+  const allowEmbedded = (typeof env !== "undefined" && env.AI_JOB_SERVICE_MODE === "embedded") || (typeof process !== "undefined" && process.env.NODE_ENV !== "production");
+
+  if (!serviceUrl || !clientSecret) {
+    if (!allowEmbedded) {
+      return NextResponse.json(
+        { error: "AI Job Service is not configured on this environment" },
+        { status: 503, headers: noStoreHeaders }
+      );
+    }
+  }
 
   if (serviceUrl && clientSecret) {
     try {

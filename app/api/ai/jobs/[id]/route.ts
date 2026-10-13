@@ -28,6 +28,16 @@ export async function GET(
         },
       });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
+      // Strict authorization check: prevent users from reading another user's AI job
+      if (remoteRes.ok && !isWorker && actor && actor.role !== "admin") {
+        const remoteJob = (remoteData as { job?: { created_by?: string } }).job;
+        if (remoteJob && remoteJob.created_by) {
+          const creator = remoteJob.created_by;
+          if (creator !== `account:${actor.id}` && creator !== `tickminder:account:${actor.id}`) {
+            return NextResponse.json({ error: "Forbidden: You do not own this AI job" }, { status: 403, headers: noStoreHeaders });
+          }
+        }
+      }
       return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to connect to independent AI Job Service";

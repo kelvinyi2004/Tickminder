@@ -77,6 +77,7 @@ const server = spawn('node', [
   '--ip', '127.0.0.1', '--port', '5176',
   '--inspector-port', '0',
   '--var', `HERMES_AI_WORKER_SECRET:${WORKER_SECRET}`,
+  '--var', 'AI_JOB_SERVICE_MODE:embedded',
 ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
 let serverOutput = '';

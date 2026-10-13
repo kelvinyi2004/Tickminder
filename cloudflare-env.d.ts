@@ -17,5 +17,6 @@ declare namespace Cloudflare {
     HERMES_AI_WORKER_SECRET?: string;
     AI_JOB_SERVICE_URL?: string;
     AI_JOB_SERVICE_SECRET?: string;
+    AI_JOB_SERVICE_MODE?: string;
   }
 }

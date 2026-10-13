@@ -140,6 +140,7 @@ class HermesBridge:
         """
         Invokes the local Hermes AI engine using the dedicated, restricted profile `tuitionos-worker`.
         All dangerous tools (terminal, file, browser) are disabled in this profile.
+        Omits --ignore-rules so the profile's SOUL.md security directives are strictly loaded.
         """
         if not os.path.isfile(self.hermes_bin):
             raise FileNotFoundError(f"Hermes binary not found at: {self.hermes_bin}")
@@ -150,7 +151,6 @@ class HermesBridge:
             self.hermes_profile,
             "-z",
             prompt,
-            "--ignore-rules",
         ]
 
         proc = subprocess.run(
@@ -177,6 +177,28 @@ class HermesBridge:
             return json.loads(clean)
         except json.JSONDecodeError as err:
             raise ValueError(f"Failed to parse JSON from Hermes response: {raw_out}") from err
+
+    @staticmethod
+    def validate_recommendation_schema(data: Dict[str, Any]) -> None:
+        """
+        Strict schema validation on Hermes AI output to prevent malformed or bypassing responses.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("Hermes response must be a JSON object")
+        if "viable" not in data or not isinstance(data["viable"], bool):
+            raise ValueError("Missing or invalid boolean field 'viable'")
+        if "confidence" not in data or not isinstance(data["confidence"], (int, float)):
+            raise ValueError("Missing or invalid numeric field 'confidence'")
+        if "proposedSlot" not in data or not isinstance(data["proposedSlot"], dict):
+            raise ValueError("Missing or invalid object field 'proposedSlot'")
+        slot = data["proposedSlot"]
+        if not slot.get("start") or not slot.get("end"):
+            raise ValueError("proposedSlot must contain non-empty 'start' and 'end'")
+        if data.get("requiresApproval") is not True:
+            raise ValueError("requiresApproval must be strictly True")
+        rec = data.get("recommendation")
+        if rec not in ["recommend", "conflict_detected"]:
+            raise ValueError(f"Invalid recommendation value: {rec}")
 
     def process_reschedule_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -244,6 +266,7 @@ Respond strictly with valid JSON:
 
         recommendation = self.invoke_hermes(prompt)
         recommendation["requiresApproval"] = True
+        self.validate_recommendation_schema(recommendation)
         return recommendation
 
     def run_once(self) -> bool:
