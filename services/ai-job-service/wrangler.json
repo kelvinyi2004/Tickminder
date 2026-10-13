@@ -1,0 +1,17 @@
+{
+  "name": "ai-job-service",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai-jobs-d1",
+      "database_id": "00000000-0000-4000-8000-000000000001"
+    }
+  ],
+  "vars": {
+    "TICKMINDER_CLIENT_SECRET": "tickminder-secure-client-token-32-chars-long",
+    "HERMES_WORKER_SECRET": "hermes-secure-local-worker-token-32-chars-long"
+  }
+}

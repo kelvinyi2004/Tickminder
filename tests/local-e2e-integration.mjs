@@ -30,7 +30,7 @@ DELETE FROM ai_job_events WHERE job_id IN (SELECT id FROM ai_jobs WHERE payload 
 DELETE FROM ai_jobs WHERE payload LIKE '%lesson:e2e-%';
 DELETE FROM reschedule_requests WHERE lesson_id LIKE 'lesson:e2e-%';
 DELETE FROM lessons WHERE id LIKE 'lesson:e2e-%';
-DELETE FROM sessions WHERE account_id IN ('acc:mr-kelvin-e2e', 'acc:felix-e2e');
+DELETE FROM sessions WHERE account_id IN ('acc:mr-kelvin-e2e', 'acc:felix-e2e') OR token_hash IN ('${teacherHash}', '${studentHash}');
 DELETE FROM assignments WHERE account_id IN ('acc:mr-kelvin-e2e', 'acc:felix-e2e');
 DELETE FROM accounts WHERE id IN ('acc:mr-kelvin-e2e', 'acc:felix-e2e');
 DELETE FROM plans WHERE key = 'Felix|Form 5 Mathematics';

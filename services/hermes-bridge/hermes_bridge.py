@@ -93,15 +93,26 @@ class HermesBridge:
             "leaseSeconds": lease_seconds,
             "types": ["reschedule_recommendation", "conflict_analysis", "schedule_optimization"],
         }
-        res = self._request("/api/ai/jobs/poll", data=payload, method="POST")
-        return res.get("job")
+        try:
+            res = self._request("/api/jobs/poll", data=payload, method="POST")
+            return res.get("job")
+        except RuntimeError as e:
+            if "404" in str(e):
+                res = self._request("/api/ai/jobs/poll", data=payload, method="POST")
+                return res.get("job")
+            raise
 
     def renew_lease(self, job_id: str, extension_seconds: int = 300) -> Dict[str, Any]:
         payload = {
             "workerId": self.worker_id,
             "extensionSeconds": extension_seconds,
         }
-        return self._request(f"/api/ai/jobs/{job_id}/heartbeat", data=payload, method="POST")
+        try:
+            return self._request(f"/api/jobs/{job_id}/heartbeat", data=payload, method="POST")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return self._request(f"/api/ai/jobs/{job_id}/heartbeat", data=payload, method="POST")
+            raise
 
     def submit_result(
         self,
@@ -118,7 +129,12 @@ class HermesBridge:
             "error": error,
             "allowRetry": allow_retry,
         }
-        return self._request(f"/api/ai/jobs/{job_id}/result", data=payload, method="POST")
+        try:
+            return self._request(f"/api/jobs/{job_id}/result", data=payload, method="POST")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return self._request(f"/api/ai/jobs/{job_id}/result", data=payload, method="POST")
+            raise
 
     def invoke_hermes(self, prompt: str) -> Dict[str, Any]:
         """

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { env } from "cloudflare:workers";
 import { verifyAiWorkerAuth, noStoreHeaders } from "@/lib/ai-auth";
 import { currentBusinessAccount } from "@/lib/auth";
 import { createAiJob, checkAiJobRateLimit, hasActiveAiJobForLesson, type AiJobRecord } from "@/lib/ai-jobs";
@@ -124,6 +125,31 @@ export async function POST(request: Request) {
   const bodyIdempotency = typeof data.idempotencyKey === "string" ? data.idempotencyKey.trim() : null;
   const idempotencyKey = (headerIdempotency?.trim() || bodyIdempotency) || null;
   const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : 3;
+
+  // If independent AI Job Service is configured, forward authorized request server-to-server
+  const serviceUrl = typeof env !== "undefined" ? env.AI_JOB_SERVICE_URL : undefined;
+  const clientSecret = typeof env !== "undefined" ? env.AI_JOB_SERVICE_SECRET : undefined;
+
+  if (serviceUrl && clientSecret) {
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${clientSecret}`,
+        "Content-Type": "application/json",
+      };
+      if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+
+      const remoteRes = await fetch(`${serviceUrl.replace(/\/$/, "")}/api/jobs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ type, payload, idempotencyKey, createdBy, maxAttempts }),
+      });
+      const remoteData = (await remoteRes.json()) as Record<string, unknown>;
+      return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to connect to independent AI Job Service";
+      return NextResponse.json({ error: msg }, { status: 502, headers: noStoreHeaders });
+    }
+  }
 
   try {
     const { job, created } = await createAiJob({

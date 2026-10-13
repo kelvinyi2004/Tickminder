@@ -15,5 +15,7 @@ declare namespace Cloudflare {
     PDF_MAX_BYTES?: string;
     PDF_TOTAL_STORAGE_LIMIT_BYTES?: string;
     HERMES_AI_WORKER_SECRET?: string;
+    AI_JOB_SERVICE_URL?: string;
+    AI_JOB_SERVICE_SECRET?: string;
   }
 }
