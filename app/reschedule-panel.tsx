@@ -14,9 +14,94 @@ export function RescheduleRequestDialog({ lesson, close, mutate, busy }: { lesso
   const [start, setStart] = useState(lesson ? local(lesson.plannedStart) : "");
   const [end, setEnd] = useState(lesson ? local(lesson.plannedEnd) : "");
   const [note, setNote] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<{ proposedSlot?: { start: string; end: string }; summary?: string; summary_zh?: string } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  async function requestAiRecommendation() {
+    if (!lesson) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const res = await fetch("/api/ai/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "reschedule_recommendation",
+          payload: {
+            lessonId: lesson.id,
+            student: lesson.student,
+            teacherName: lesson.teacherName,
+            subject: lesson.subject,
+            currentStart: lesson.plannedStart,
+            currentEnd: lesson.plannedEnd,
+            notes: note || undefined,
+          },
+        }),
+      });
+      const data = await res.json() as { ok?: boolean; job?: { id: string }; error?: string };
+      if (!res.ok || !data.job) throw new Error(data.error || "无法创建 AI 改期推荐任务");
+      const jobId = data.job.id;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const poll = await fetch(`/api/ai/jobs/${jobId}`);
+        if (!poll.ok) continue;
+        const jobData = await poll.json() as { ok?: boolean; job?: { status: string; result?: string | object; error?: string } };
+        if (jobData.job?.status === "completed") {
+          const parsed = typeof jobData.job.result === "string" ? JSON.parse(jobData.job.result) : jobData.job.result;
+          setAiResult(parsed as { proposedSlot?: { start: string; end: string }; summary?: string; summary_zh?: string });
+          setAiLoading(false);
+          return;
+        }
+        if (jobData.job?.status === "failed") {
+          throw new Error(jobData.job.error || "AI 分析未能生成有效推荐");
+        }
+      }
+      throw new Error("AI 正在计算中，请稍后刷新");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "请求 AI 失败";
+      setAiError(msg);
+      setAiLoading(false);
+    }
+  }
+
   return <Dialog open={Boolean(lesson)} onOpenChange={open => { if (!open) close(); }}><DialogContent className="lesson-dialog"><DialogHeader><DialogTitle>{t("申请改期")}</DialogTitle></DialogHeader>{lesson && <form onSubmit={async e => { e.preventDefault(); if (await mutate({ action: "proposeReschedule", id: lesson.id, start, end, note })) close(); }}>
     <p className="dialog-sub">{lesson.subject} · {lesson.teacherName}<br/>{t("原时间：")}{range(lesson.plannedStart, lesson.plannedEnd)}</p>
     <p className="muted">{t("对方同意后才会更新上课时间。")}</p>
+    <div style={{ display: "flex", gap: "8px", alignItems: "center", margin: "8px 0" }}>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={busy || aiLoading}
+        onClick={requestAiRecommendation}
+      >
+        {aiLoading ? t("Hermes AI 分析中...") : t("✨ Hermes AI 推荐时间")}
+      </Button>
+      {aiError && <span style={{ color: "var(--destructive, #ef4444)", fontSize: "12px" }}>{aiError}</span>}
+    </div>
+    {aiResult && (
+      <div style={{ background: "rgba(14, 165, 233, 0.08)", border: "1px solid rgba(14, 165, 233, 0.3)", borderRadius: "8px", padding: "10px", margin: "8px 0", fontSize: "13px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+          <strong>✨ Hermes AI 推荐方案</strong>
+          {aiResult.proposedSlot?.start && (
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                if (aiResult.proposedSlot?.start) setStart(local(aiResult.proposedSlot.start));
+                if (aiResult.proposedSlot?.end) setEnd(local(aiResult.proposedSlot.end));
+              }}
+            >
+              {t("应用建议")}
+            </Button>
+          )}
+        </div>
+        <p style={{ margin: 0, color: "var(--muted-foreground, #64748b)" }}>
+          {aiResult.summary_zh || aiResult.summary || t("建议时间已生成，请检查并确认。")}
+        </p>
+      </div>
+    )}
     <div className="form-pair"><label>{t("新开始时间")}<input type="datetime-local" required value={start} onChange={e => setStart(e.target.value)}/></label><label>{t("新结束时间")}<input type="datetime-local" required value={end} onChange={e => setEnd(e.target.value)}/></label></div>
     <ConflictPreview enabled={Boolean(start && end && start < end)} value={{ action: "proposeReschedule", id: lesson.id, start, end }}/>
     <label>{t("备注（可选）")}<textarea maxLength={500} value={note} onChange={e => setNote(e.target.value)}/></label><Button className="primary-full" disabled={busy}>{t("发送给老师确认")}</Button>

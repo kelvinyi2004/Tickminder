@@ -43,10 +43,12 @@ export async function GET(request: Request) {
     const hasIdentities = await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'google_identities'").first();
     const hasTerms = await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'academic_terms'").first();
     const hasNotifications = await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'notification_items'").first();
+    const hasAiJobs = await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'ai_jobs'").first();
     const names = hasClassrooms ? [...baseTables, ...classroomTables] : [...baseTables];
     if (hasIdentities) (names as string[]).push("google_identities");
     if (hasTerms) (names as string[]).push("academic_terms");
     if (hasNotifications) (names as string[]).push("notification_items","notification_deliveries","push_subscriptions","notification_runtime");
+    if (hasAiJobs) (names as string[]).push("ai_jobs","ai_job_events");
     const tables: Record<string, { columns: string[]; rows: Record<string, unknown>[] }> = {};
     for (const name of names) {
       const info = await db.prepare(`PRAGMA table_info("${name}")`).all<{ name: string }>();

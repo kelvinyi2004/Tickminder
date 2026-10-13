@@ -261,3 +261,37 @@ export const notificationDeliveries = sqliteTable("notification_deliveries", {
 export const notificationRuntime = sqliteTable("notification_runtime", {
   id: integer("id").primaryKey(), lastDispatchAt: text("last_dispatch_at").notNull(),
 });
+
+export const aiJobs = sqliteTable("ai_jobs", {
+  id: text("id").primaryKey(),
+  idempotencyKey: text("idempotency_key"),
+  type: text("type").notNull(),
+  status: text("status").notNull().default("pending"),
+  payload: text("payload").notNull(),
+  result: text("result"),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  lockUntil: text("lock_until"),
+  lockedBy: text("locked_by"),
+  createdBy: text("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at"),
+}, (t) => [
+  uniqueIndex("ai_jobs_idempotency_key_unique").on(t.idempotencyKey),
+  index("ai_jobs_status_lock_idx").on(t.status, t.lockUntil, t.createdAt),
+  index("ai_jobs_created_by_idx").on(t.createdBy),
+]);
+
+export const aiJobEvents = sqliteTable("ai_job_events", {
+  id: text("id").primaryKey(),
+  jobId: text("job_id").notNull(),
+  eventType: text("event_type").notNull(),
+  actorId: text("actor_id").notNull(),
+  payload: text("payload"),
+  createdAt: text("created_at").notNull(),
+}, (t) => [
+  index("ai_job_events_job_idx").on(t.jobId),
+  index("ai_job_events_created_at_idx").on(t.createdAt),
+]);

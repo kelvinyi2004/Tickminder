@@ -14,5 +14,6 @@ declare namespace Cloudflare {
     VAPID_SUBJECT?: string;
     PDF_MAX_BYTES?: string;
     PDF_TOTAL_STORAGE_LIMIT_BYTES?: string;
+    HERMES_AI_WORKER_SECRET?: string;
   }
 }
