@@ -1,12 +1,12 @@
 {
-  "name": "ai-job-service",
+  "name": "tuitionos-ai-jobs-staging",
   "main": "src/index.ts",
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "ai-jobs-d1",
+      "database_name": "tuitionos-ai-jobs-staging-db",
       "database_id": "00000000-0000-4000-8000-000000000001"
     }
   ],
