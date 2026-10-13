@@ -402,6 +402,55 @@ export async function renewAiJobLease(params: {
   return { ok: true, job: updated };
 }
 
+export async function checkAiJobRateLimit(
+  creator: string,
+  limits = { perMinute: 5, perHour: 30 }
+): Promise<{ allowed: boolean; retryAfter?: number; reason?: string }> {
+  const nowMs = Date.now();
+  const oneMinuteAgo = new Date(nowMs - 60_000).toISOString();
+  const oneHourAgo = new Date(nowMs - 3600_000).toISOString();
+
+  const minCount = await first<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM ai_jobs WHERE created_by = ? AND created_at > ?",
+    creator,
+    oneMinuteAgo
+  );
+  if ((minCount?.c ?? 0) >= limits.perMinute) {
+    return {
+      allowed: false,
+      retryAfter: 60,
+      reason: "每分钟最多发起 5 次 AI 分析请求，请等待后重试",
+    };
+  }
+
+  const hourCount = await first<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM ai_jobs WHERE created_by = ? AND created_at > ?",
+    creator,
+    oneHourAgo
+  );
+  if ((hourCount?.c ?? 0) >= limits.perHour) {
+    return {
+      allowed: false,
+      retryAfter: 3600,
+      reason: "每小时最多发起 30 次 AI 分析请求，请稍后重试",
+    };
+  }
+
+  return { allowed: true };
+}
+
+export async function hasActiveAiJobForLesson(lessonId: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  const active = await first<{ id: string }>(
+    `SELECT id FROM ai_jobs 
+     WHERE (status = 'pending' OR (status = 'processing' AND lock_until IS NOT NULL AND lock_until > ?))
+       AND payload LIKE ?`,
+    now,
+    `%"lessonId":"${lessonId}"%`
+  );
+  return Boolean(active);
+}
+
 export async function getAiJobEvents(jobId: string): Promise<AiJobEventRecord[]> {
   return await rows<AiJobEventRecord>(
     "SELECT * FROM ai_job_events WHERE job_id = ? ORDER BY created_at ASC",

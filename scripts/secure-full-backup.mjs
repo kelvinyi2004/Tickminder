@@ -7,7 +7,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, sep } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const args = process.argv.slice(2);
@@ -19,21 +19,45 @@ function option(name) {
 }
 function outsideGit(value) {
   const path = resolve(value);
-  if (path.toLowerCase().startsWith(root.toLowerCase() + '\\')) throw new Error('Keep credentials and backups outside the source repository');
+  if (path.toLowerCase().startsWith(root.toLowerCase() + sep)) throw new Error('Keep credentials and backups outside the source repository');
   return path;
 }
+function getMachineKey() {
+  const keyPath = resolve(process.env.HOME || '~', '.timelyo_backup_key');
+  if (existsSync(keyPath)) return readFileSync(keyPath);
+  const newKey = randomBytes(32);
+  writeFileSync(keyPath, newKey, { mode: 0o600 });
+  return newKey;
+}
 function dpapi(mode, value) {
-  const method = mode === 'protect' ? 'Protect' : 'Unprotect';
-  const script = [
-    '$ErrorActionPreference = "Stop"', 'Add-Type -AssemblyName System.Security',
-    '$data = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())',
-    `$out = [System.Security.Cryptography.ProtectedData]::${method}($data, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)`,
-    '[Console]::Out.Write([Convert]::ToBase64String($out))',
-  ].join('; ');
-  return Buffer.from(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    input: value.toString('base64'), encoding: 'utf8', windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
-  }).trim(), 'base64');
+  if (process.platform === 'win32') {
+    const method = mode === 'protect' ? 'Protect' : 'Unprotect';
+    const script = [
+      '$ErrorActionPreference = "Stop"', 'Add-Type -AssemblyName System.Security',
+      '$data = [Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())',
+      `$out = [System.Security.Cryptography.ProtectedData]::${method}($data, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)`,
+      '[Console]::Out.Write([Convert]::ToBase64String($out))',
+    ].join('; ');
+    return Buffer.from(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      input: value.toString('base64'), encoding: 'utf8', windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
+    }).trim(), 'base64');
+  }
+  const key = getMachineKey();
+  if (mode === 'protect') {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([cipher.update(value), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return Buffer.concat([iv, tag, enc]);
+  } else {
+    const iv = value.subarray(0, 12);
+    const tag = value.subarray(12, 28);
+    const enc = value.subarray(28);
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]);
+  }
 }
 function sha(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
 function seal(bytes, key) {

@@ -4,8 +4,8 @@
 //        node scripts/secure-d1-backup.mjs verify --in C:\\...\\snapshot.json.dpapi
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 const command = process.argv[2];
@@ -24,31 +24,66 @@ const projectRoot = resolve(import.meta.dirname, '..').toLowerCase();
 function targetPath(flag) {
   if (option !== flag || !target) throw new Error(`Expected ${flag} PATH`);
   const resolved = resolve(target);
-  if (resolved.toLowerCase().startsWith(projectRoot + '\\')) {
+  if (resolved.toLowerCase().startsWith(projectRoot + sep)) {
     throw new Error('Database backups must remain outside the source repository');
   }
   return resolved;
 }
 
+function getMachineKey() {
+  const keyPath = resolve(process.env.HOME || '~', '.timelyo_backup_key');
+  if (existsSync(keyPath)) return readFileSync(keyPath);
+  const newKey = randomBytes(32);
+  writeFileSync(keyPath, newKey, { mode: 0o600 });
+  return newKey;
+}
+
 function dpapi(mode, value) {
-  const method = mode === 'protect' ? 'Protect' : 'Unprotect';
-  const script = [
-    '$ErrorActionPreference = "Stop"',
-    'Add-Type -AssemblyName System.Security',
-    '$inputText = [Console]::In.ReadToEnd().Trim()',
-    '$bytes = [Convert]::FromBase64String($inputText)',
-    `$result = [System.Security.Cryptography.ProtectedData]::${method}($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)`,
-    '[Console]::Out.Write([Convert]::ToBase64String($result))',
-  ].join('; ');
-  return Buffer.from(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    input: value.toString('base64'), encoding: 'utf8', windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
-  }).trim(), 'base64');
+  if (process.platform === 'win32') {
+    const method = mode === 'protect' ? 'Protect' : 'Unprotect';
+    const script = [
+      '$ErrorActionPreference = "Stop"',
+      'Add-Type -AssemblyName System.Security',
+      '$inputText = [Console]::In.ReadToEnd().Trim()',
+      '$bytes = [Convert]::FromBase64String($inputText)',
+      `$result = [System.Security.Cryptography.ProtectedData]::${method}($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)`,
+      '[Console]::Out.Write([Convert]::ToBase64String($result))',
+    ].join('; ');
+    return Buffer.from(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      input: value.toString('base64'), encoding: 'utf8', windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 1024 * 1024,
+    }).trim(), 'base64');
+  }
+  const key = getMachineKey();
+  if (mode === 'protect') {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([cipher.update(value), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return Buffer.concat([iv, tag, enc]);
+  } else {
+    const iv = value.subarray(0, 12);
+    const tag = value.subarray(12, 28);
+    const enc = value.subarray(28);
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]);
+  }
 }
 
 function validateExport(data) {
-  const expectedTables = data?.format === 'timelyo-d1-v7' ? [...baseTables,...classroomTables,'google_identities','academic_terms','notification_items','notification_deliveries','push_subscriptions','notification_runtime'] : ['timelyo-d1-v4','timelyo-d1-v5','timelyo-d1-v6','timelyo-d1-v7'].includes(data?.format) ? [...baseTables, ...classroomTables, 'google_identities', 'academic_terms'] : data?.format === 'timelyo-d1-v3' ? [...baseTables, ...classroomTables, 'google_identities'] : data?.format === 'timelyo-d1-v2' ? [...baseTables, ...classroomTables] : baseTables;
-  if (!data || !['timelyo-d1-v1', 'timelyo-d1-v2', 'timelyo-d1-v3', 'timelyo-d1-v4', 'timelyo-d1-v5','timelyo-d1-v6','timelyo-d1-v7'].includes(data.format) || !data.tables ||
+  const expectedTables = data?.format === 'timelyo-d1-v8'
+    ? [...baseTables, ...classroomTables, 'google_identities', 'academic_terms', 'notification_items', 'notification_deliveries', 'push_subscriptions', 'notification_runtime', 'ai_jobs', 'ai_job_events']
+    : data?.format === 'timelyo-d1-v7'
+    ? [...baseTables, ...classroomTables, 'google_identities', 'academic_terms', 'notification_items', 'notification_deliveries', 'push_subscriptions', 'notification_runtime']
+    : ['timelyo-d1-v4', 'timelyo-d1-v5', 'timelyo-d1-v6'].includes(data?.format)
+    ? [...baseTables, ...classroomTables, 'google_identities', 'academic_terms']
+    : data?.format === 'timelyo-d1-v3'
+    ? [...baseTables, ...classroomTables, 'google_identities']
+    : data?.format === 'timelyo-d1-v2'
+    ? [...baseTables, ...classroomTables]
+    : baseTables;
+  if (!data || !['timelyo-d1-v1', 'timelyo-d1-v2', 'timelyo-d1-v3', 'timelyo-d1-v4', 'timelyo-d1-v5', 'timelyo-d1-v6', 'timelyo-d1-v7', 'timelyo-d1-v8'].includes(data.format) || !data.tables ||
       Object.keys(data.tables).sort().join('|') !== expectedTables.slice().sort().join('|')) {
     throw new Error('Incomplete database export');
   }
@@ -68,7 +103,15 @@ function restoreInMemory(data) {
   const expectedTables = validateExport(data);
   const db = new DatabaseSync(':memory:');
   try {
-    for (const prefix of [...baseMigrations, ...(data.format !== 'timelyo-d1-v1' ? ['0010'] : []), ...(['timelyo-d1-v3','timelyo-d1-v4','timelyo-d1-v5','timelyo-d1-v6','timelyo-d1-v7'].includes(data.format) ? ['0011'] : []), ...(['timelyo-d1-v4','timelyo-d1-v5','timelyo-d1-v6','timelyo-d1-v7'].includes(data.format) ? ['0012'] : []), ...(['timelyo-d1-v5','timelyo-d1-v6','timelyo-d1-v7'].includes(data.format) ? ['0013'] : []), ...(['timelyo-d1-v6','timelyo-d1-v7'].includes(data.format) ? ['0014'] : []), ...(data.format === 'timelyo-d1-v7' ? ['0015'] : [])]) {
+    for (const prefix of [
+      ...baseMigrations,
+      ...(data.format !== 'timelyo-d1-v1' ? ['0010'] : []),
+      ...(['timelyo-d1-v3', 'timelyo-d1-v4', 'timelyo-d1-v5', 'timelyo-d1-v6', 'timelyo-d1-v7', 'timelyo-d1-v8'].includes(data.format) ? ['0011'] : []),
+      ...(['timelyo-d1-v4', 'timelyo-d1-v5', 'timelyo-d1-v6', 'timelyo-d1-v7', 'timelyo-d1-v8'].includes(data.format) ? ['0012'] : []),
+      ...(['timelyo-d1-v5', 'timelyo-d1-v6', 'timelyo-d1-v7', 'timelyo-d1-v8'].includes(data.format) ? ['0013'] : []),
+      ...(['timelyo-d1-v6', 'timelyo-d1-v7', 'timelyo-d1-v8'].includes(data.format) ? ['0014'] : []),
+      ...(data.format === 'timelyo-d1-v8' ? ['0015', '0016'] : data.format === 'timelyo-d1-v7' ? ['0015'] : []),
+    ]) {
       const file = readdirSync(resolve(projectRoot, 'drizzle')).find((name) => name.startsWith(prefix + '_') && name.endsWith('.sql'));
       if (!file) throw new Error(`Missing migration ${prefix}`);
       db.exec(readFileSync(resolve(projectRoot, 'drizzle', file), 'utf8'));

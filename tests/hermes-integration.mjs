@@ -258,11 +258,46 @@ assert.equal(duplicateData.job.id, jobId);
 const totalJobsCount = db.prepare('SELECT COUNT(*) AS count FROM ai_jobs').get().count;
 assert.equal(totalJobsCount, 1, 'Total ai_jobs rows must remain 1 after duplicate submission');
 
+console.log('Testing: 4.5. Rate Limiting Safeguards');
+// Active lesson duplicate check: cannot start second job on same lesson while first is pending
+const reqActiveDuplicate = new Request('http://localhost/api/ai/jobs', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    type: 'reschedule_recommendation',
+    payload: { lessonId, student: 'Felix', teacherName: 'Mr Kelvin', subject: 'Form 5 Maths' },
+  }),
+});
+const resActiveDuplicate = await jobsRoute.POST(reqActiveDuplicate);
+assert.equal(resActiveDuplicate.status, 429);
+const activeDupData = await resActiveDuplicate.json();
+assert.ok(activeDupData.error.includes('已有正在处理中的 AI 分析任务'));
+
+// Rapid fire requests for different generic jobs: 5 allowed per minute, 6th rate-limited
+for (let i = 0; i < 4; i++) {
+  const reqRapid = new Request('http://localhost/api/ai/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'conflict_analysis', payload: { custom: i } }),
+  });
+  const resRapid = await jobsRoute.POST(reqRapid);
+  assert.equal(resRapid.status, 201);
+}
+// 6th request within same minute exceeds limit of 5
+const reqLimitExceeded = new Request('http://localhost/api/ai/jobs', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ type: 'conflict_analysis', payload: { custom: 99 } }),
+});
+const resLimitExceeded = await jobsRoute.POST(reqLimitExceeded);
+assert.equal(resLimitExceeded.status, 429);
+assert.equal(resLimitExceeded.headers.get('Retry-After'), '60');
+
 console.log('Testing: 5. Atomic Polling & Leased Claiming');
 const reqPollWorker = new Request('http://localhost/api/ai/jobs/poll', {
   method: 'POST',
   headers: { Authorization: `Bearer ${TEST_SECRET}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ workerId: 'worker-node-1', leaseSeconds: 120 }),
+  body: JSON.stringify({ workerId: 'worker-node-1', leaseSeconds: 120, types: ['reschedule_recommendation'] }),
 });
 const resPollWorker = await pollRoute.POST(reqPollWorker);
 assert.equal(resPollWorker.status, 200);
@@ -279,7 +314,7 @@ console.log('Testing: 6. Concurrent Worker Race Condition Prevention');
 const reqPollWorker2 = new Request('http://localhost/api/ai/jobs/poll', {
   method: 'POST',
   headers: { Authorization: `Bearer ${TEST_SECRET}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({ workerId: 'worker-node-2', leaseSeconds: 120 }),
+  body: JSON.stringify({ workerId: 'worker-node-2', leaseSeconds: 120, types: ['reschedule_recommendation'] }),
 });
 const resPollWorker2 = await pollRoute.POST(reqPollWorker2);
 const pollData2 = await resPollWorker2.json();

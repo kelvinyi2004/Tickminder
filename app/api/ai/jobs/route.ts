@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyAiWorkerAuth, noStoreHeaders } from "@/lib/ai-auth";
 import { currentBusinessAccount } from "@/lib/auth";
-import { createAiJob, type AiJobRecord } from "@/lib/ai-jobs";
+import { createAiJob, checkAiJobRateLimit, hasActiveAiJobForLesson, type AiJobRecord } from "@/lib/ai-jobs";
 import { first, rows } from "@/lib/learning-server";
 import { readRoster } from "@/lib/roster";
 import { teacherMaySeeLesson } from "@/lib/access";
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     }
     createdBy = `account:${actor.id}`;
 
-    // Read body to validate lesson access if lessonId is supplied
+    // Read body early to extract idempotencyKey and payload
     let body: Body;
     try {
       body = await request.clone().json();
@@ -32,10 +32,42 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: noStoreHeaders });
     }
 
+    const headerIdempotency = request.headers.get("Idempotency-Key");
+    const bodyIdempotency = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : null;
+    const idempotencyKey = (headerIdempotency?.trim() || bodyIdempotency) || null;
+
+    // Fast-path idempotency: return existing job before rate limiting or active-job checks
+    if (idempotencyKey) {
+      const existing = await first<AiJobRecord>("SELECT * FROM ai_jobs WHERE idempotency_key = ?", idempotencyKey);
+      if (existing) {
+        return NextResponse.json({ ok: true, job: existing, created: false }, { status: 200, headers: noStoreHeaders });
+      }
+    }
+
+    // Rate limit check: max 5/min, 30/hour per user
+    const rateCheck = await checkAiJobRateLimit(createdBy);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: rateCheck.reason, retryAfter: rateCheck.retryAfter },
+        {
+          status: 429,
+          headers: { ...noStoreHeaders, "Retry-After": String(rateCheck.retryAfter || 60) },
+        }
+      );
+    }
+
     const payload = (body.payload && typeof body.payload === "object" ? body.payload : {}) as Record<string, unknown>;
     const lessonId = typeof payload.lessonId === "string" ? payload.lessonId.trim() : null;
 
     if (lessonId) {
+      const activeRunning = await hasActiveAiJobForLesson(lessonId);
+      if (activeRunning) {
+        return NextResponse.json(
+          { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", retryAfter: 30 },
+          { status: 429, headers: { ...noStoreHeaders, "Retry-After": "30" } }
+        );
+      }
+
       const lesson = await first<{ id: string; student: string; subject: string; teacherName: string; plannedStart: string; plannedEnd: string }>(
         "SELECT id, student, subject, teacher_name AS teacherName, planned_start AS plannedStart, planned_end AS plannedEnd FROM lessons WHERE id = ?",
         lessonId
