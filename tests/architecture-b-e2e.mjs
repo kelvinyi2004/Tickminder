@@ -81,7 +81,7 @@ assert.equal(resSeedT.status, 0, `Tickminder D1 seed failed: ${resSeedT.stderr}`
 const aiSeedSql = `DELETE FROM ai_job_events; DELETE FROM ai_jobs;`;
 const resSeedA = spawnSync('node', [
   '--import', './scripts/sites-env.mjs',
-  './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'ai-jobs-d1',
+  './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'tuitionos-ai-jobs-staging-db',
   '--local', '--persist-to', 'services/ai-job-service/.wrangler/state',
   '--command', aiSeedSql,
   '--config', 'services/ai-job-service/wrangler.json',
@@ -98,6 +98,8 @@ const aiServer = spawn('node', [
   '--local', '--persist-to', '.wrangler/state',
   '--ip', '127.0.0.1', '--port', '5178',
   '--inspector-port', '0',
+  '--var', `TICKMINDER_CLIENT_SECRET:${CLIENT_SECRET}`,
+  '--var', `HERMES_WORKER_SECRET:${WORKER_SECRET}`,
 ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
 console.log('=== Step 2: Start Tickminder Server (Port 5176) with AI Job Service Bindings ===');
@@ -340,7 +342,7 @@ try {
   // Force expire in DB
   spawnSync('node', [
     '--import', './scripts/sites-env.mjs',
-    './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'ai-jobs-d1',
+    './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'tuitionos-ai-jobs-staging-db',
     '--local', '--persist-to', 'services/ai-job-service/.wrangler/state',
     '--command', `UPDATE ai_jobs SET lock_until = datetime('now', '-1 minute') WHERE id = '${jobExpRes.job.id}';`,
     '--config', 'services/ai-job-service/wrangler.json',
@@ -369,7 +371,7 @@ try {
 
   const aiAudit = spawnSync('node', [
     '--import', './scripts/sites-env.mjs',
-    './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'ai-jobs-d1',
+    './node_modules/wrangler/bin/wrangler.js', 'd1', 'execute', 'tuitionos-ai-jobs-staging-db',
     '--local', '--persist-to', 'services/ai-job-service/.wrangler/state',
     '--command', `SELECT event_type, actor_id, created_at FROM ai_job_events WHERE job_id = '${jobId}' ORDER BY created_at ASC;`,
     '--config', 'services/ai-job-service/wrangler.json',
