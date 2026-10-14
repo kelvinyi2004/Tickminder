@@ -10,104 +10,7 @@ import { teacherMaySeeLesson } from "@/lib/access";
 type Body = Record<string, unknown>;
 
 export async function POST(request: Request) {
-  let createdBy: string | null = null;
-  const isWorker = await verifyAiWorkerAuth(request);
-
-  if (isWorker) {
-    createdBy = "worker:hermes";
-  } else {
-    const actor = await currentBusinessAccount();
-    if (!actor) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: noStoreHeaders });
-    }
-    if (!["admin", "teacher", "student"].includes(actor.role)) {
-      return NextResponse.json({ error: "Forbidden role" }, { status: 403, headers: noStoreHeaders });
-    }
-    createdBy = `account:${actor.id}`;
-
-    // Read body early to extract idempotencyKey and payload
-    let body: Body;
-    try {
-      body = await request.clone().json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: noStoreHeaders });
-    }
-
-    const headerIdempotency = request.headers.get("Idempotency-Key");
-    const bodyIdempotency = typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : null;
-    const idempotencyKey = (headerIdempotency?.trim() || bodyIdempotency) || null;
-
-    // Fast-path idempotency: return existing job before rate limiting or active-job checks
-    if (idempotencyKey) {
-      const existing = await first<AiJobRecord>("SELECT * FROM ai_jobs WHERE idempotency_key = ?", idempotencyKey);
-      if (existing) {
-        return NextResponse.json({ ok: true, job: existing, created: false }, { status: 200, headers: noStoreHeaders });
-      }
-    }
-
-    // Rate limit check: max 5/min, 30/hour per user
-    const rateCheck = await checkAiJobRateLimit(createdBy);
-    if (!rateCheck.allowed) {
-      return NextResponse.json(
-        { error: rateCheck.reason, retryAfter: rateCheck.retryAfter },
-        {
-          status: 429,
-          headers: { ...noStoreHeaders, "Retry-After": String(rateCheck.retryAfter || 60) },
-        }
-      );
-    }
-
-    const payload = (body.payload && typeof body.payload === "object" ? body.payload : {}) as Record<string, unknown>;
-    const lessonId = typeof payload.lessonId === "string" ? payload.lessonId.trim() : null;
-
-    if (lessonId) {
-      const activeRunning = await hasActiveAiJobForLesson(lessonId);
-      if (activeRunning) {
-        return NextResponse.json(
-          { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", retryAfter: 30 },
-          { status: 429, headers: { ...noStoreHeaders, "Retry-After": "30" } }
-        );
-      }
-
-      const lesson = await first<{ id: string; student: string; subject: string; teacherName: string; plannedStart: string; plannedEnd: string }>(
-        "SELECT id, student, subject, teacher_name AS teacherName, planned_start AS plannedStart, planned_end AS plannedEnd FROM lessons WHERE id = ?",
-        lessonId
-      );
-      if (!lesson) {
-        return NextResponse.json({ error: "Lesson not found" }, { status: 404, headers: noStoreHeaders });
-      }
-
-      if (actor.role === "teacher") {
-        const roster = await readRoster();
-        const activeKeys = new Set(
-          roster.plans.filter(p => p.teacher === actor.teacherName).map(p => p.key)
-        );
-        if (!teacherMaySeeLesson(actor, lesson, activeKeys)) {
-          return NextResponse.json({ error: "Forbidden lesson access" }, { status: 403, headers: noStoreHeaders });
-        }
-      } else if (actor.role === "student") {
-        if (actor.studentName !== lesson.student) {
-          return NextResponse.json({ error: "Forbidden lesson access" }, { status: 403, headers: noStoreHeaders });
-        }
-      }
-
-      // Populate authorized schedule context to prevent AI from inventing availability
-      const related = await rows<{ id: string; student: string; teacherName: string; plannedStart: string; plannedEnd: string }>(
-        "SELECT id, student, teacher_name AS teacherName, planned_start AS plannedStart, planned_end AS plannedEnd FROM lessons WHERE (student = ? OR teacher_name = ?) AND status <> 'cancelled'",
-        lesson.student,
-        lesson.teacherName
-      );
-      payload.student = lesson.student;
-      payload.teacherName = lesson.teacherName;
-      payload.subject = lesson.subject;
-      payload.currentStart = lesson.plannedStart;
-      payload.currentEnd = lesson.plannedEnd;
-      payload.busySlots = related
-        .filter(r => r.id !== lesson.id)
-        .map(r => ({ start: r.plannedStart, end: r.plannedEnd }));
-    }
-  }
-
+  // 1. Parse request once
   let data: Body;
   try {
     data = await request.json();
@@ -115,32 +18,102 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: noStoreHeaders });
   }
 
+  // 2. Validate authenticated user / worker
+  let createdBy: string | null = null;
+  const isWorker = await verifyAiWorkerAuth(request);
+
+  let actor: Awaited<ReturnType<typeof currentBusinessAccount>> = null;
+  if (isWorker) {
+    createdBy = "worker:hermes";
+  } else {
+    actor = await currentBusinessAccount();
+    if (!actor) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: noStoreHeaders });
+    }
+    if (!["admin", "teacher", "student"].includes(actor.role)) {
+      return NextResponse.json({ error: "Forbidden role" }, { status: 403, headers: noStoreHeaders });
+    }
+    createdBy = `account:${actor.id}`;
+  }
+
+  // 3. Validate job type
   const type = typeof data.type === "string" ? data.type.trim() : "";
   if (!type || type.length > 64) {
     return NextResponse.json({ error: "Valid job type is required" }, { status: 400, headers: noStoreHeaders });
   }
 
-  const payload = data.payload ?? {};
+  // 4. Retrieve authorized lesson data & build authoritative scheduling context
+  const clientPayload = (data.payload && typeof data.payload === "object" ? data.payload : {}) as Record<string, unknown>;
+  const lessonId = typeof clientPayload.lessonId === "string" ? clientPayload.lessonId.trim() : null;
+
+  const enrichedPayload: Record<string, unknown> = {
+    ...clientPayload,
+  };
+
+  if (lessonId && !isWorker && actor) {
+    const lesson = await first<{
+      id: string;
+      student: string;
+      subject: string;
+      teacherName: string;
+      plannedStart: string;
+      plannedEnd: string;
+    }>(
+      "SELECT id, student, subject, teacher_name AS teacherName, planned_start AS plannedStart, planned_end AS plannedEnd FROM lessons WHERE id = ?",
+      lessonId
+    );
+    if (!lesson) {
+      return NextResponse.json({ error: "Lesson not found" }, { status: 404, headers: noStoreHeaders });
+    }
+
+    if (actor.role === "teacher") {
+      const roster = await readRoster();
+      const activeKeys = new Set(
+        roster.plans.filter(p => p.teacher === actor!.teacherName).map(p => p.key)
+      );
+      if (!teacherMaySeeLesson(actor, lesson, activeKeys)) {
+        return NextResponse.json({ error: "Forbidden lesson access" }, { status: 403, headers: noStoreHeaders });
+      }
+    } else if (actor.role === "student") {
+      if (actor.studentName !== lesson.student) {
+        return NextResponse.json({ error: "Forbidden lesson access" }, { status: 403, headers: noStoreHeaders });
+      }
+    }
+
+    // Populate authorized schedule context to prevent AI from inventing availability
+    const related = await rows<{ id: string; student: string; teacherName: string; plannedStart: string; plannedEnd: string }>(
+      "SELECT id, student, teacher_name AS teacherName, planned_start AS plannedStart, planned_end AS plannedEnd FROM lessons WHERE (student = ? OR teacher_name = ?) AND status <> 'cancelled'",
+      lesson.student,
+      lesson.teacherName
+    );
+
+    enrichedPayload.lessonId = lesson.id;
+    enrichedPayload.student = lesson.student;
+    enrichedPayload.teacherName = lesson.teacherName;
+    enrichedPayload.subject = lesson.subject;
+    enrichedPayload.currentStart = lesson.plannedStart;
+    enrichedPayload.currentEnd = lesson.plannedEnd;
+    enrichedPayload.timezone = typeof clientPayload.timezone === "string" ? clientPayload.timezone : "Asia/Kuala_Lumpur";
+    // Authoritative busySlots from lessons table - never trust client-provided busySlots
+    enrichedPayload.busySlots = related
+      .filter(r => r.id !== lesson.id)
+      .map(r => ({ start: r.plannedStart, end: r.plannedEnd }));
+  }
+
+  // 5. Extract idempotency and execution limits
   const headerIdempotency = request.headers.get("Idempotency-Key");
   const bodyIdempotency = typeof data.idempotencyKey === "string" ? data.idempotencyKey.trim() : null;
   const idempotencyKey = (headerIdempotency?.trim() || bodyIdempotency) || null;
-  const maxAttempts = typeof data.maxAttempts === "number" ? data.maxAttempts : 3;
+  const maxAttempts = typeof data.maxAttempts === "number" ? Math.max(1, Math.min(10, data.maxAttempts)) : 3;
 
-  // If independent AI Job Service is configured, forward authorized request server-to-server
+  // 6. Check Architecture B configuration (Independent AI Job Service)
   const serviceUrl = typeof env !== "undefined" ? env.AI_JOB_SERVICE_URL : undefined;
   const clientSecret = typeof env !== "undefined" ? env.AI_JOB_SERVICE_SECRET : undefined;
-  const allowEmbedded = (typeof env !== "undefined" && env.AI_JOB_SERVICE_MODE === "embedded") || (typeof process !== "undefined" && process.env.NODE_ENV !== "production");
+  const isArchitectureB = Boolean(serviceUrl && clientSecret);
 
-  if (!serviceUrl || !clientSecret) {
-    if (!allowEmbedded) {
-      return NextResponse.json(
-        { error: "AI Job Service is not configured on this environment" },
-        { status: 503, headers: noStoreHeaders }
-      );
-    }
-  }
-
-  if (serviceUrl && clientSecret) {
+  if (isArchitectureB) {
+    // Architecture B mode: Forward to independent AI Job Service.
+    // Zero dependencies on local ai_jobs tables or migration 0016 in Tickminder D1!
     try {
       const headers: Record<string, string> = {
         Authorization: `Bearer ${clientSecret}`,
@@ -148,10 +121,16 @@ export async function POST(request: Request) {
       };
       if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
-      const remoteRes = await fetch(`${serviceUrl.replace(/\/$/, "")}/api/jobs`, {
+      const remoteRes = await fetch(`${serviceUrl!.replace(/\/$/, "")}/api/jobs`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ type, payload, idempotencyKey, createdBy, maxAttempts }),
+        body: JSON.stringify({
+          type,
+          payload: enrichedPayload,
+          idempotencyKey,
+          createdBy,
+          maxAttempts,
+        }),
       });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
       return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
@@ -161,12 +140,50 @@ export async function POST(request: Request) {
     }
   }
 
+  // Embedded mode fallback (local development only)
+  const allowEmbedded = (typeof env !== "undefined" && env.AI_JOB_SERVICE_MODE === "embedded") || (typeof process !== "undefined" && process.env.NODE_ENV !== "production");
+  if (!allowEmbedded) {
+    return NextResponse.json(
+      { error: "AI Job Service is not configured on this environment" },
+      { status: 503, headers: noStoreHeaders }
+    );
+  }
+
+  // Embedded queue operations (only runs when embedded mode is enabled)
+  if (idempotencyKey) {
+    const existing = await first<AiJobRecord>("SELECT * FROM ai_jobs WHERE idempotency_key = ?", idempotencyKey);
+    if (existing) {
+      return NextResponse.json({ ok: true, job: existing, created: false }, { status: 200, headers: noStoreHeaders });
+    }
+  }
+
+  const rateCheck = await checkAiJobRateLimit(createdBy!);
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { error: rateCheck.reason, retryAfter: rateCheck.retryAfter },
+      {
+        status: 429,
+        headers: { ...noStoreHeaders, "Retry-After": String(rateCheck.retryAfter || 60) },
+      }
+    );
+  }
+
+  if (lessonId) {
+    const activeRunning = await hasActiveAiJobForLesson(lessonId);
+    if (activeRunning) {
+      return NextResponse.json(
+        { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", retryAfter: 30 },
+        { status: 429, headers: { ...noStoreHeaders, "Retry-After": "30" } }
+      );
+    }
+  }
+
   try {
     const { job, created } = await createAiJob({
       type,
-      payload,
+      payload: enrichedPayload,
       idempotencyKey,
-      createdBy,
+      createdBy: createdBy!,
       maxAttempts,
     });
 
@@ -198,6 +215,31 @@ export async function GET(request: Request) {
   const status = url.searchParams.get("status");
   const type = url.searchParams.get("type");
 
+  // Architecture B check
+  const serviceUrl = typeof env !== "undefined" ? env.AI_JOB_SERVICE_URL : undefined;
+  const clientSecret = typeof env !== "undefined" ? env.AI_JOB_SERVICE_SECRET : undefined;
+
+  if (serviceUrl && clientSecret) {
+    try {
+      const forwardUrl = new URL(`${serviceUrl.replace(/\/$/, "")}/api/jobs`);
+      if (filterCreator) forwardUrl.searchParams.set("createdBy", filterCreator);
+      if (status) forwardUrl.searchParams.set("status", status);
+      if (type) forwardUrl.searchParams.set("type", type);
+
+      const remoteRes = await fetch(forwardUrl.toString(), {
+        headers: {
+          Authorization: `Bearer ${clientSecret}`,
+        },
+      });
+      const remoteData = (await remoteRes.json()) as Record<string, unknown>;
+      return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to connect to independent AI Job Service";
+      return NextResponse.json({ error: msg }, { status: 502, headers: noStoreHeaders });
+    }
+  }
+
+  // Embedded mode fallback
   let query = "SELECT * FROM ai_jobs WHERE 1=1";
   const params: unknown[] = [];
 
@@ -216,6 +258,11 @@ export async function GET(request: Request) {
 
   query += " ORDER BY created_at DESC LIMIT 50";
 
-  const jobs = await rows<AiJobRecord>(query, ...params);
-  return NextResponse.json({ ok: true, jobs }, { headers: noStoreHeaders });
+  try {
+    const jobs = await rows<AiJobRecord>(query, ...params);
+    return NextResponse.json({ ok: true, jobs }, { headers: noStoreHeaders });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to list AI jobs";
+    return NextResponse.json({ error: msg }, { status: 500, headers: noStoreHeaders });
+  }
 }

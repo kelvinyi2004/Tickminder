@@ -31,8 +31,10 @@ const propEndUtc = '2026-10-21T13:00:00.000Z';
 
 console.log('=== Step 0: Seed Local Databases (Tickminder D1 and AI Jobs D1) ===');
 
-// Clean and seed Tickminder D1
+// Clean and seed Tickminder D1 (STRICTLY migrations 0000-0015 only; ZERO ai_jobs tables!)
 const tickminderSeedSql = `
+DROP TABLE IF EXISTS ai_job_events;
+DROP TABLE IF EXISTS ai_jobs;
 DELETE FROM audit WHERE lesson_id LIKE 'lesson:archb-%';
 DELETE FROM reschedule_requests WHERE lesson_id LIKE 'lesson:archb-%';
 DELETE FROM lessons WHERE id LIKE 'lesson:archb-%';
@@ -65,7 +67,8 @@ VALUES ('${teacherHash}', 'acc:mr-kelvin-archb', datetime('now', '+30 days')),
        ('${otherStudentHash}', 'acc:other-archb', datetime('now', '+30 days'));
 
 INSERT INTO lessons (id, student, subject, teacher_name, planned_start, planned_end, status, kind, created_by, updated_at)
-VALUES ('${lessonId}', 'Felix', 'Form 5 Mathematics', 'Mr Kelvin', '${origStartUtc}', '${origEndUtc}', 'scheduled', 'regular', 'acc:mr-kelvin-archb', datetime('now'));
+VALUES ('${lessonId}', 'Felix', 'Form 5 Mathematics', 'Mr Kelvin', '${origStartUtc}', '${origEndUtc}', 'scheduled', 'regular', 'acc:mr-kelvin-archb', datetime('now')),
+       ('lesson:archb-busy-slot', 'Felix', 'Form 5 Mathematics', 'Mr Kelvin', '2026-10-21T08:00:00.000Z', '2026-10-21T09:00:00.000Z', 'scheduled', 'regular', 'acc:mr-kelvin-archb', datetime('now'));
 `;
 
 const resSeedT = spawnSync('node', [
@@ -112,7 +115,7 @@ const tickminderServer = spawn('node', [
   '--inspector-port', '0',
   '--var', `AI_JOB_SERVICE_URL:${aiServiceUrl}`,
   '--var', `AI_JOB_SERVICE_SECRET:${CLIENT_SECRET}`,
-], { stdio: ['ignore', 'pipe', 'pipe'] });
+], { stdio: ['ignore', 'pipe', 'inherit'] });
 
 async function waitReady(url, name) {
   for (let i = 0; i < 30; i++) {
@@ -167,6 +170,9 @@ try {
     type: 'reschedule_recommendation',
     payload: { lessonId },
   });
+  if (resForbidden.status !== 403) {
+    console.error('resForbidden debug:', resForbidden.status, resForbidden.data);
+  }
   assert.equal(resForbidden.status, 403, 'Foreign student must be forbidden from initiating AI job on unowned lesson');
   console.log('✓ Foreign student access correctly denied with HTTP 403');
 
@@ -208,6 +214,20 @@ try {
   const jobId = createJobRes.data.job.id;
   assert.equal(createJobRes.data.job.status, 'pending');
   console.log(`✓ Job enqueued to Independent AI Job Service: ID ${jobId}`);
+
+  // Verify authoritative busySlots were attached to the payload
+  const storedPayload = typeof createJobRes.data.job.payload === 'string'
+    ? JSON.parse(createJobRes.data.job.payload)
+    : createJobRes.data.job.payload;
+  assert.ok(Array.isArray(storedPayload.busySlots), 'Payload must contain busySlots array');
+  assert.ok(storedPayload.busySlots.length >= 1, 'Authoritative busySlots must contain the other active lesson');
+  console.log('✓ Authoritative busySlots verified in job payload:', storedPayload.busySlots);
+
+  // Verify Tickminder job listing route forwards to Independent AI Job Service
+  const listJobsRes = await callTickminder(teacherToken, '/api/ai/jobs', null, 'GET');
+  assert.equal(listJobsRes.status, 200);
+  assert.ok(Array.isArray(listJobsRes.data.jobs), 'Job list must be an array');
+  console.log(`✓ Architecture B job listing endpoint verified: returned ${listJobsRes.data.jobs.length} jobs`);
 
   console.log('=== Test Edge Case: Hermes Temporarily Offline ===');
   // Teacher polls status before worker runs -> receives pending gracefully

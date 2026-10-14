@@ -126,6 +126,26 @@ export default {
         return json({ error: "Rate limit exceeded (max 30 per hour)", retryAfter: 3600 }, 429, { "Retry-After": "3600" });
       }
 
+      // Active running job check for the same lesson
+      const lessonId = typeof payload === "object" && payload !== null && typeof (payload as Record<string, unknown>).lessonId === "string"
+        ? ((payload as Record<string, unknown>).lessonId as string).trim()
+        : null;
+
+      if (lessonId) {
+        const fiveMinAgo = new Date(Date.now() - 300_000).toISOString();
+        const active = await env.DB.prepare(
+          "SELECT id FROM ai_jobs WHERE status IN ('pending', 'processing') AND created_at > ? AND payload LIKE ? LIMIT 1"
+        ).bind(fiveMinAgo, `%"lessonId":"${lessonId}"%`).first<{ id: string }>();
+
+        if (active) {
+          return json(
+            { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", retryAfter: 30 },
+            429,
+            { "Retry-After": "30" }
+          );
+        }
+      }
+
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
       const payloadStr = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -378,6 +398,37 @@ export default {
         .all()).results;
 
       return json({ ok: true, job, events });
+    }
+
+    // 6. List Jobs: GET /api/jobs (Client Auth only)
+    if (path === "/api/jobs" && method === "GET") {
+      if (!isClient && !isWorker) {
+        return json({ error: "Unauthorized" }, 401);
+      }
+      const statusParam = url.searchParams.get("status");
+      const typeParam = url.searchParams.get("type");
+      const createdByParam = url.searchParams.get("createdBy");
+      const limitParam = Math.min(100, Math.max(1, parseInt(url.searchParams.get("limit") || "50", 10) || 50));
+
+      let sql = "SELECT * FROM ai_jobs WHERE 1=1";
+      const bindings: unknown[] = [];
+      if (createdByParam) {
+        sql += " AND created_by = ?";
+        bindings.push(createdByParam);
+      }
+      if (statusParam) {
+        sql += " AND status = ?";
+        bindings.push(statusParam);
+      }
+      if (typeParam) {
+        sql += " AND type = ?";
+        bindings.push(typeParam);
+      }
+      sql += " ORDER BY created_at DESC LIMIT ?";
+      bindings.push(limitParam);
+
+      const rows = (await env.DB.prepare(sql).bind(...bindings).all()).results;
+      return json({ ok: true, jobs: rows });
     }
 
     return json({ error: `Not found: ${method} ${path}` }, 404);

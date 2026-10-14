@@ -242,6 +242,9 @@ class HermesBridge:
         busy_slots = payload.get("busySlots", [])
         notes = str(payload.get("notes", ""))[:500]
 
+        busy_summary = [f"{s.get('start')} to {s.get('end')}" for s in busy_slots if isinstance(s, dict) and s.get("start")]
+        print(f"[{self.worker_id}] Job {job.get('id')} payload received {len(busy_slots)} authoritative busySlots: {busy_summary}")
+
         # Check candidate slot against authorized busy intervals directly
         has_overlap = False
         if proposed_start and proposed_end:
