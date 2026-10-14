@@ -60,30 +60,54 @@ class HermesBridge:
         self, endpoint: str, data: Optional[Dict[str, Any]] = None, method: str = "GET"
     ) -> Dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
+        import urllib.parse, http.client, ssl, socket
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
         headers = {
             "Authorization": f"Bearer {self.worker_secret}",
             "Content-Type": "application/json",
             "User-Agent": f"HermesBridge/{self.worker_id}",
+            "Host": host,
         }
         if self.cf_access_client_id and self.cf_access_client_secret:
             headers["CF-Access-Client-Id"] = self.cf_access_client_id
             headers["CF-Access-Client-Secret"] = self.cf_access_client_secret
 
-        req_data = json.dumps(data).encode("utf-8") if data is not None else None
-        req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
+        req_body = json.dumps(data) if data is not None else None
+
+        target_ip = host
+        try:
+            socket.gethostbyname(host)
+        except Exception:
+            if "workers.dev" in host:
+                target_ip = "104.21.36.219"
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            raw_err = e.read().decode("utf-8")
-            try:
-                err_json = json.loads(raw_err)
-                msg = err_json.get("error", raw_err)
-            except Exception:
-                msg = raw_err
-            raise RuntimeError(f"HTTP {e.code} from {endpoint}: {msg}")
+            if parsed.scheme == "https":
+                ctx = ssl.create_default_context()
+                sock = socket.create_connection((target_ip, port), timeout=30)
+                ssock = ctx.wrap_socket(sock, server_hostname=host)
+                conn = http.client.HTTPSConnection(host, port, timeout=30)
+                conn.sock = ssock
+            else:
+                conn = http.client.HTTPConnection(target_ip, port, timeout=30)
+
+            conn.request(method, path, body=req_body, headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read().decode("utf-8")
+            if resp.status >= 400:
+                try:
+                    err_json = json.loads(raw)
+                    msg = err_json.get("error", raw)
+                except Exception:
+                    msg = raw
+                raise RuntimeError(f"HTTP {resp.status} from {endpoint}: {msg}")
+            return json.loads(raw) if raw else {}
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to connect to {url}: {e}")
 

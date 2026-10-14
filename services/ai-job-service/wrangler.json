@@ -7,11 +7,7 @@
     {
       "binding": "DB",
       "database_name": "tuitionos-ai-jobs-staging-db",
-      "database_id": "00000000-0000-4000-8000-000000000001"
+      "database_id": "a5249bc5-c464-44ec-ba58-b83d0fab0a7d"
     }
-  ],
-  "vars": {
-    "TICKMINDER_CLIENT_SECRET": "tickminder-secure-client-token-32-chars-long",
-    "HERMES_WORKER_SECRET": "hermes-secure-local-worker-token-32-chars-long"
-  }
+  ]
 }
