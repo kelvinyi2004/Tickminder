@@ -28,14 +28,17 @@ export async function GET(
         },
       });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
-      // Strict authorization check: prevent users from reading another user's AI job
+      // Strict authorization check: prevent users from reading another user's AI job (fail-closed)
       if (remoteRes.ok && !isWorker && actor && actor.role !== "admin") {
         const remoteJob = (remoteData as { job?: { created_by?: string } }).job;
-        if (remoteJob && remoteJob.created_by) {
-          const creator = remoteJob.created_by;
-          if (creator !== `account:${actor.id}` && creator !== `tickminder:account:${actor.id}`) {
-            return NextResponse.json({ error: "Forbidden: You do not own this AI job" }, { status: 403, headers: noStoreHeaders });
-          }
+        if (!remoteJob || typeof remoteJob !== "object" || !remoteJob.created_by || typeof remoteJob.created_by !== "string") {
+          return NextResponse.json({ error: "Forbidden: Missing or malformed job ownership metadata" }, { status: 403, headers: noStoreHeaders });
+        }
+        const creator = remoteJob.created_by.trim();
+        const expectedCreator = `account:${actor.id}`;
+        const altExpected = `tickminder:account:${actor.id}`;
+        if (creator !== expectedCreator && creator !== altExpected) {
+          return NextResponse.json({ error: "Forbidden: You do not own this AI job" }, { status: 403, headers: noStoreHeaders });
         }
       }
       return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
@@ -50,9 +53,15 @@ export async function GET(
     return NextResponse.json({ error: "Job not found" }, { status: 404, headers: noStoreHeaders });
   }
 
-  if (!isWorker && actor) {
-    if (actor.role !== "admin" && job.created_by !== `account:${actor.id}`) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403, headers: noStoreHeaders });
+  if (!isWorker && actor && actor.role !== "admin") {
+    if (!job.created_by || typeof job.created_by !== "string") {
+      return NextResponse.json({ error: "Forbidden: Missing job ownership metadata" }, { status: 403, headers: noStoreHeaders });
+    }
+    const creator = job.created_by.trim();
+    const expected = `account:${actor.id}`;
+    const altExpected = `tickminder:account:${actor.id}`;
+    if (creator !== expected && creator !== altExpected) {
+      return NextResponse.json({ error: "Forbidden: You do not own this AI job" }, { status: 403, headers: noStoreHeaders });
     }
   }
 

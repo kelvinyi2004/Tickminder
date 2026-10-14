@@ -35,15 +35,15 @@ console.log('=== Step 0: Seed Local Databases (Tickminder D1 and AI Jobs D1) ===
 const tickminderSeedSql = `
 DROP TABLE IF EXISTS ai_job_events;
 DROP TABLE IF EXISTS ai_jobs;
-DELETE FROM audit WHERE lesson_id LIKE 'lesson:archb-%';
-DELETE FROM reschedule_requests WHERE lesson_id LIKE 'lesson:archb-%';
-DELETE FROM lessons WHERE id LIKE 'lesson:archb-%';
-DELETE FROM sessions WHERE account_id IN ('acc:mr-kelvin-archb', 'acc:felix-archb', 'acc:other-archb') OR token_hash IN ('${teacherHash}', '${studentHash}', '${otherStudentHash}');
-DELETE FROM assignments WHERE account_id IN ('acc:mr-kelvin-archb', 'acc:felix-archb');
-DELETE FROM accounts WHERE id IN ('acc:mr-kelvin-archb', 'acc:felix-archb', 'acc:other-archb');
-DELETE FROM plans WHERE key = 'Felix|Form 5 Mathematics';
-DELETE FROM students WHERE name IN ('Felix', 'Other Student');
-DELETE FROM teachers WHERE name = 'Mr Kelvin';
+DELETE FROM audit;
+DELETE FROM reschedule_requests;
+DELETE FROM lessons;
+DELETE FROM sessions;
+DELETE FROM assignments;
+DELETE FROM accounts;
+DELETE FROM plans;
+DELETE FROM students;
+DELETE FROM teachers;
 
 INSERT INTO teachers (name, active, created_at) VALUES ('Mr Kelvin', 1, datetime('now'));
 INSERT INTO students (name, name_key, active, created_at) VALUES ('Felix', 'felix', 1, datetime('now'));

@@ -126,20 +126,22 @@ export default {
         return json({ error: "Rate limit exceeded (max 30 per hour)", retryAfter: 3600 }, 429, { "Retry-After": "3600" });
       }
 
-      // Active running job check for the same lesson
+      // Active running job check for the same lesson (blocks pending indefinitely and processing while leased)
       const lessonId = typeof payload === "object" && payload !== null && typeof (payload as Record<string, unknown>).lessonId === "string"
         ? ((payload as Record<string, unknown>).lessonId as string).trim()
         : null;
 
       if (lessonId) {
-        const fiveMinAgo = new Date(Date.now() - 300_000).toISOString();
-        const active = await env.DB.prepare(
-          "SELECT id FROM ai_jobs WHERE status IN ('pending', 'processing') AND created_at > ? AND payload LIKE ? LIMIT 1"
-        ).bind(fiveMinAgo, `%"lessonId":"${lessonId}"%`).first<{ id: string }>();
+        const active = await env.DB.prepare(`
+          SELECT id, status, lock_until FROM ai_jobs 
+          WHERE payload LIKE ? 
+            AND (status = 'pending' OR (status = 'processing' AND (lock_until IS NULL OR lock_until > datetime('now'))))
+          ORDER BY created_at DESC LIMIT 1
+        `).bind(`%"lessonId":"${lessonId}"%`).first<{ id: string; status: string; lock_until: string | null }>();
 
         if (active) {
           return json(
-            { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", retryAfter: 30 },
+            { error: "该课程已有正在处理中的 AI 分析任务，请稍后刷新结果", jobId: active.id, status: active.status, retryAfter: 30 },
             429,
             { "Retry-After": "30" }
           );

@@ -35,6 +35,9 @@ export function RescheduleRequestDialog({ lesson, close, mutate, busy }: { lesso
             subject: lesson.subject,
             currentStart: lesson.plannedStart,
             currentEnd: lesson.plannedEnd,
+            proposedStart: start ? (start.includes("T") && !start.endsWith("Z") ? start : start) : undefined,
+            proposedEnd: end ? (end.includes("T") && !end.endsWith("Z") ? end : end) : undefined,
+            timezone: "Asia/Kuala_Lumpur",
             notes: note || undefined,
           },
         }),
@@ -49,7 +52,12 @@ export function RescheduleRequestDialog({ lesson, close, mutate, busy }: { lesso
         const jobData = await poll.json() as { ok?: boolean; job?: { status: string; result?: string | object; error?: string } };
         if (jobData.job?.status === "completed") {
           const parsed = typeof jobData.job.result === "string" ? JSON.parse(jobData.job.result) : jobData.job.result;
-          setAiResult(parsed as { proposedSlot?: { start: string; end: string }; summary?: string; summary_zh?: string });
+          const rec = parsed as { proposedSlot?: { start: string; end: string }; summary?: string; summary_zh?: string };
+          setAiResult(rec);
+          if (rec?.proposedSlot?.start && rec?.proposedSlot?.end) {
+            setStart(local(rec.proposedSlot.start));
+            setEnd(local(rec.proposedSlot.end));
+          }
           setAiLoading(false);
           return;
         }

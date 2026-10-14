@@ -98,6 +98,79 @@ export async function POST(request: Request) {
     enrichedPayload.busySlots = related
       .filter(r => r.id !== lesson.id)
       .map(r => ({ start: r.plannedStart, end: r.plannedEnd }));
+
+    // Deterministic candidate slot generation if client did not supply a valid proposed slot
+    const durationMs = (new Date(lesson.plannedEnd).getTime() - new Date(lesson.plannedStart).getTime()) || 3600_000;
+
+    function parseToUtc(iso: string): number {
+      if (!iso) return NaN;
+      const s = iso.trim();
+      if (s.endsWith("Z") || s.includes("+") || s.slice(10).includes("-")) {
+        return new Date(s).getTime();
+      }
+      return new Date(s + "+08:00").getTime();
+    }
+
+    const busyIntervals = (enrichedPayload.busySlots as Array<{ start: string; end: string }>).map(b => ({
+      start: parseToUtc(b.start),
+      end: parseToUtc(b.end),
+    })).filter(i => !isNaN(i.start) && !isNaN(i.end));
+
+    let candidateStart = typeof clientPayload.proposedStart === "string" && clientPayload.proposedStart.trim() ? clientPayload.proposedStart.trim() : null;
+    let candidateEnd = typeof clientPayload.proposedEnd === "string" && clientPayload.proposedEnd.trim() ? clientPayload.proposedEnd.trim() : null;
+
+    if (candidateStart && candidateEnd) {
+      const cStart = parseToUtc(candidateStart);
+      const cEnd = parseToUtc(candidateEnd);
+      if (isNaN(cStart) || isNaN(cEnd) || cEnd <= cStart) {
+        candidateStart = null;
+        candidateEnd = null;
+      }
+    }
+
+    if (!candidateStart || !candidateEnd) {
+      // Deterministically find the earliest future conflict-free candidate in operating hours (08:00–22:00 MYT)
+      const curStartMs = parseToUtc(lesson.plannedStart);
+      const baseDate = new Date(isNaN(curStartMs) ? Date.now() : curStartMs);
+      const testHours = [10, 14, 16, 19, 20];
+
+      let found: { start: string; end: string } | null = null;
+      for (let dayOffset = 1; dayOffset <= 7 && !found; dayOffset++) {
+        const d = new Date(baseDate.getTime() + dayOffset * 86400_000);
+        // Format YYYY-MM-DD
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+        const dateStr = String(d.getUTCDate()).padStart(2, "0");
+
+        for (const hour of testHours) {
+          const hStr = String(hour).padStart(2, "0");
+          const slotStart = `${y}-${m}-${dateStr}T${hStr}:00`;
+          const slotStartUtc = parseToUtc(slotStart);
+          const slotEndUtc = slotStartUtc + durationMs;
+          const endDt = new Date(slotEndUtc + 8 * 3600_000);
+          const endH = String(endDt.getUTCHours()).padStart(2, "0");
+          const endM = String(endDt.getUTCMinutes()).padStart(2, "0");
+          const slotEnd = `${y}-${m}-${dateStr}T${endH}:${endM}`;
+
+          // Check conflicts against busyIntervals
+          const hasConflict = busyIntervals.some(b => slotStartUtc < b.end && b.start < slotEndUtc);
+          if (!hasConflict) {
+            found = { start: slotStart, end: slotEnd };
+            break;
+          }
+        }
+      }
+
+      if (found) {
+        candidateStart = found.start;
+        candidateEnd = found.end;
+      }
+    }
+
+    if (candidateStart && candidateEnd) {
+      enrichedPayload.proposedStart = candidateStart;
+      enrichedPayload.proposedEnd = candidateEnd;
+    }
   }
 
   // 5. Extract idempotency and execution limits
