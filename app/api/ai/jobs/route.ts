@@ -196,17 +196,26 @@ export async function POST(request: Request) {
       };
       if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
-      const remoteRes = await fetch(`${serviceUrl!.replace(/\/$/, "")}/api/jobs`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type,
-          payload: enrichedPayload,
-          idempotencyKey,
-          createdBy,
-          maxAttempts,
-        }),
+      const serviceBinding = typeof env !== "undefined" ? (env as { AI_JOB_SERVICE?: Fetcher }).AI_JOB_SERVICE : undefined;
+      const postBody = JSON.stringify({
+        type,
+        payload: enrichedPayload,
+        idempotencyKey,
+        createdBy,
+        maxAttempts,
       });
+
+      const remoteRes = serviceBinding
+        ? await serviceBinding.fetch("https://ai-service/api/jobs", {
+            method: "POST",
+            headers,
+            body: postBody,
+          })
+        : await fetch(`${serviceUrl!.replace(/\/$/, "")}/api/jobs`, {
+            method: "POST",
+            headers,
+            body: postBody,
+          });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
       return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
     } catch (err: unknown) {
@@ -301,11 +310,18 @@ export async function GET(request: Request) {
       if (status) forwardUrl.searchParams.set("status", status);
       if (type) forwardUrl.searchParams.set("type", type);
 
-      const remoteRes = await fetch(forwardUrl.toString(), {
-        headers: {
-          Authorization: `Bearer ${clientSecret}`,
-        },
-      });
+      const serviceBinding = typeof env !== "undefined" ? (env as { AI_JOB_SERVICE?: Fetcher }).AI_JOB_SERVICE : undefined;
+      const remoteRes = serviceBinding
+        ? await serviceBinding.fetch(`https://ai-service/api/jobs?${forwardUrl.searchParams.toString()}`, {
+            headers: {
+              Authorization: `Bearer ${clientSecret}`,
+            },
+          })
+        : await fetch(forwardUrl.toString(), {
+            headers: {
+              Authorization: `Bearer ${clientSecret}`,
+            },
+          });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
       return NextResponse.json(remoteData, { status: remoteRes.status, headers: noStoreHeaders });
     } catch (err: unknown) {

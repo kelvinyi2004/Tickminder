@@ -10,13 +10,13 @@
     {
       "binding": "DB",
       "database_name": "tuitionos-web-test-db",
-      "database_id": "PENDING_CREATION_APPROVAL"
+      "database_id": "3d34a796-93f7-44cf-8f5f-33ef2ee77994"
     }
   ],
-  "r2_buckets": [
+  "services": [
     {
-      "binding": "BUCKET",
-      "bucket_name": "tuitionos-web-test-r2"
+      "binding": "AI_JOB_SERVICE",
+      "service": "tuitionos-ai-jobs-staging"
     }
   ],
   "vars": {

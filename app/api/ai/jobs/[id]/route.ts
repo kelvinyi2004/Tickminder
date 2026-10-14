@@ -22,11 +22,18 @@ export async function GET(
 
   if (serviceUrl && clientSecret) {
     try {
-      const remoteRes = await fetch(`${serviceUrl.replace(/\/$/, "")}/api/jobs/${id}`, {
-        headers: {
-          Authorization: `Bearer ${clientSecret}`,
-        },
-      });
+      const serviceBinding = typeof env !== "undefined" ? (env as { AI_JOB_SERVICE?: Fetcher }).AI_JOB_SERVICE : undefined;
+      const remoteRes = serviceBinding
+        ? await serviceBinding.fetch(`https://ai-service/api/jobs/${id}`, {
+            headers: {
+              Authorization: `Bearer ${clientSecret}`,
+            },
+          })
+        : await fetch(`${serviceUrl.replace(/\/$/, "")}/api/jobs/${id}`, {
+            headers: {
+              Authorization: `Bearer ${clientSecret}`,
+            },
+          });
       const remoteData = (await remoteRes.json()) as Record<string, unknown>;
       // Strict authorization check: prevent users from reading another user's AI job (fail-closed)
       if (remoteRes.ok && !isWorker && actor && actor.role !== "admin") {

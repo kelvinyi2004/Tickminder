@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { env } from "cloudflare:workers";
 import { currentBusinessAccount as currentAccount } from "@/lib/auth";
 import { first, learningDb, studentHasHomework } from "@/lib/learning-server";
 import { pdfSignatureValid } from "@/lib/learning";
@@ -7,6 +8,9 @@ import { cleanOldStagedFiles, pdfBucket, pdfLimits } from "@/lib/pdf-storage";
 const errorResponse = (message: string, status: number) => NextResponse.json({ error: message }, { status });
 
 export async function POST(request: Request) {
+  if (typeof env !== "undefined" && !env.BUCKET) {
+    return errorResponse("Storage features are disabled for this testing phase", 503);
+  }
   if (new URL(request.url).origin !== request.headers.get("origin")) return errorResponse("Origin mismatch", 403);
   const actor = await currentAccount();
   if (!actor || !["teacher", "student"].includes(actor.role)) return errorResponse("没有上传权限", 403);
