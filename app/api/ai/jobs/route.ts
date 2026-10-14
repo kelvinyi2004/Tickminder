@@ -122,7 +122,9 @@ export async function POST(request: Request) {
     if (candidateStart && candidateEnd) {
       const cStart = parseToUtc(candidateStart);
       const cEnd = parseToUtc(candidateEnd);
-      if (isNaN(cStart) || isNaN(cEnd) || cEnd <= cStart) {
+      const curStart = parseToUtc(lesson.plannedStart);
+      // If proposed time is invalid or identical to the original lesson schedule, generate a NEW alternative slot
+      if (isNaN(cStart) || isNaN(cEnd) || cEnd <= cStart || Math.abs(cStart - curStart) < 60_000) {
         candidateStart = null;
         candidateEnd = null;
       }

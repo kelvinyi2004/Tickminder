@@ -602,10 +602,14 @@ function Workspace({ account, state, ensureScope, lessons, message, setMessage, 
         const valid = (view: unknown) => view === "notifications" || (typeof view === "string" && NAV_ITEMS[role].some(item => item.id === view));
         const state = window.history.state || {};
         const url = new URL(window.location.href);
-        if (url.searchParams.get("view") === "notifications") {
+        const qView = url.searchParams.get("view");
+        if (qView === "notifications") {
             url.searchParams.delete("view");
             setSelectedView("notifications");
             window.history.replaceState({ ...state, timelyoRole: role, timelyoView: "notifications", timelyoMenu: false }, "", url);
+        } else if (qView && valid(qView)) {
+            setSelectedView(qView);
+            window.history.replaceState({ ...state, timelyoRole: role, timelyoView: qView, timelyoMenu: false }, "", url);
         } else if (state.timelyoRole === role && valid(state.timelyoView)) setSelectedView(state.timelyoView);
         else {
             setSelectedView(home);

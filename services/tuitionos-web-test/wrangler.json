@@ -1,0 +1,25 @@
+{
+  "name": "tuitionos-web-test",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "../../dist/server/index.js",
+  "assets": {
+    "directory": "../../dist/client"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tuitionos-web-test-db",
+      "database_id": "PENDING_CREATION_APPROVAL"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "tuitionos-web-test-r2"
+    }
+  ],
+  "vars": {
+    "AI_JOB_SERVICE_URL": "https://tuitionos-ai-jobs-staging.nextgenn-ai.workers.dev"
+  }
+}

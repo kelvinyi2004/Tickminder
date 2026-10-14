@@ -8,7 +8,13 @@ import { ConflictPreview } from "./conflict-preview";
 export type RescheduleProposal = { id: string; lessonId: string; originalStart: string; originalEnd?: string; proposedStart: string; proposedEnd: string; status: string; note: string | null; requestedRole?: string };
 type Lesson = { id: string; student: string; subject: string; teacherName: string; plannedStart: string; plannedEnd: string; status: string };
 type Mutate = (body: Record<string, unknown>) => Promise<boolean>;
-const local = (iso: string) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso)).replace(" ", "T");
+const local = (iso: string) => {
+  if (!iso) return "";
+  if (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(iso)) return iso;
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "+08:00");
+  if (isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kuala_Lumpur", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(d).replace(" ", "T");
+};
 const range = (start: string, end?: string) => local(start).replace("T", " ") + (end ? " – " + local(end).replace("T", " ") : "");
 export function RescheduleRequestDialog({ lesson, close, mutate, busy }: { lesson: Lesson | null; close: () => void; mutate: Mutate; busy: boolean }) {
   const [start, setStart] = useState(lesson ? local(lesson.plannedStart) : "");
